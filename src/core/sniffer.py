@@ -15,6 +15,7 @@ class PacketSniffer:
         self.packet_count = 0
         self.stats = {
             'total_packets': 0,
+            'bytes_received': 0,
             'protocols': {},
             'start_time': None
         }
@@ -48,6 +49,7 @@ class PacketSniffer:
         self.captured_packets = []
         self.stats = {
             'total_packets': 0,
+            'bytes_received': 0,
             'protocols': {},
             'start_time': None
         }
@@ -95,8 +97,12 @@ class PacketSniffer:
         self.packet_count += 1
         self.stats['total_packets'] = self.packet_count
 
+        packet_length = len(packet)
+        self.stats['bytes_received'] += packet_length
         # 解析数据包
         parsed_packet = self.packet_parser.parse_packet(packet, self.packet_count)
+
+        parsed_packet['length'] = packet_length
 
         # 更新统计信息
         protocol = parsed_packet.get('protocol', 'Unknown')
@@ -122,6 +128,7 @@ class PacketSniffer:
         self.packet_count = 0
         self.stats = {
             'total_packets': 0,
+            'bytes_received': 0,
             'protocols': {},
             'start_time': None
         }
@@ -135,3 +142,25 @@ class PacketSniffer:
     def get_stats(self):
         """获取统计信息"""
         return self.stats.copy()
+    
+    def get_traffic_summary(self):
+        """获取流量统计摘要"""
+        stats = self.get_stats()
+        
+        # 添加人类可读的流量格式
+        bytes_received = stats['bytes_received']
+        if bytes_received < 1024:
+            traffic_str = f"{bytes_received} B"
+        elif bytes_received < 1024 * 1024:
+            traffic_str = f"{bytes_received / 1024:.2f} KB"
+        elif bytes_received < 1024 * 1024 * 1024:
+            traffic_str = f"{bytes_received / (1024 * 1024):.2f} MB"
+        else:
+            traffic_str = f"{bytes_received / (1024 * 1024 * 1024):.2f} GB"
+        
+        return {
+            'packets': stats['total_packets'],
+            'bytes': stats['bytes_received'],
+            'traffic_formatted': traffic_str,
+            'protocols': stats['protocols']
+        }

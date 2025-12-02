@@ -4,6 +4,9 @@ sniffer_env/
 .venv
 ENV/
 
+# pyqt5 -tools
+ools/
+
 # Python缓存
 __pycache__/
 *.pyc
