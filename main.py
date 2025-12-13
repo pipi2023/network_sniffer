@@ -4,7 +4,9 @@ import os
 
 sys.path.append(os.path.join(os.path.dirname(__file__), 'src'))
 
-from PyQt5.QtWidgets import QApplication
+from PyQt5.QtWidgets import QApplication, QLabel
+from PyQt5.QtGui import QFont
+from PyQt5.QtCore import QCoreApplication, Qt
 from src.ui.gui import MainWindow
 from src.core.sniffer import PacketSniffer
 from src.core.parser import ProtocolParser
@@ -14,7 +16,12 @@ def main():
     print("网络嗅探器启动...")
     try:
         # 创建QApplication实例
+        QCoreApplication.setAttribute(Qt.AA_EnableHighDpiScaling, True)
         app = QApplication(sys.argv)
+        font = QFont()
+        font.setFamily("WenQuanYi Micro Hei")  # 或者 "WenQuanYi Zen Hei", "Noto Sans CJK SC"
+        font.setPointSize(12)
+        app.setFont(font)
         app.setApplicationName("网络嗅探器")
         app.setApplicationVersion("1.0.0")
 

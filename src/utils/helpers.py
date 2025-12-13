@@ -76,3 +76,87 @@ def get_protocal_name(protocol_number):
         58: "ICMPv6",
     }
     return protocol_map.get(protocol_number, f"Unknown({protocol_number})")
+
+def guess_protocol(self, packet):
+    """猜测数据包协议"""
+    if hasattr(packet, 'haslayer'):
+        if packet.haslayer('IP'):
+            return 'IP'
+        elif packet.haslayer('TCP'):
+            return 'TCP'
+        elif packet.haslayer('UDP'):
+            return 'UDP'
+        elif packet.haslayer('ICMP'):
+            return 'ICMP'
+        elif packet.haslayer('ARP'):
+            return 'ARP'
+    return 'Unknown'
+
+def get_dns_opcode(opcode):
+    """获取DNS操作码描述"""
+    opcodes = {
+        0: 'QUERY',
+        1: 'IQUERY',
+        2: 'STATUS',
+        4: 'NOTIFY',
+        5: 'UPDATE'
+    }
+    return opcodes.get(opcode, f'Unknown({opcode})')
+
+def get_dns_rcode(rcode):
+    """获取DNS返回码描述"""
+    rcodes = {
+        0: 'No error',
+        1: 'Format error',
+        2: 'Server failure',
+        3: 'Name Error',
+        4: 'Not Implemented',
+        5: 'Refused'
+    }
+    return rcodes.get(rcode, f'Unknown({rcode})')
+
+def get_dns_type(qtype):
+    """获取DNS类型描述"""
+    types = {
+        1: 'A',
+        2: 'NS',
+        5: 'CNAME',
+        6: 'SOA',
+        12: 'PTR',
+        15: 'MX',
+        16: 'TXT',
+        28: 'AAAA',
+        33: 'SRV'
+    }
+    return types.get(qtype, f'Type{qtype}')
+
+def get_dns_class(qclass):
+    """获取DNS类别描述"""
+    classes = {
+        1: 'IN',  # Internet
+        3: 'CH',  # Chaos
+        4: 'HS'   # Hesiod
+    }
+    return classes.get(qclass, f'Class{qclass}')
+
+def format_dns_rdata(rr):
+    """格式化DNS资源记录数据"""
+    if hasattr(rr, 'rdata'):
+        if rr.type == 1:  # A记录
+            return rr.rdata
+        elif rr.type == 5:  # CNAME记录
+            return rr.rname.decode('utf-8', errors='ignore') if isinstance(rr.rname, bytes) else str(rr.rname)
+        elif rr.type == 12:  # PTR记录
+            return rr.rdata.decode('utf-8', errors='ignore') if isinstance(rr.rdata, bytes) else str(rr.rdata)
+        elif rr.type == 28:  # AAAA记录
+            return rr.rdata
+        elif rr.type == 15:  # MX记录
+            return f"{rr.preference} {rr.exchange.decode('utf-8', errors='ignore') if isinstance(rr.exchange, bytes) else rr.exchange}"
+        elif rr.type == 16:  # TXT记录
+            if isinstance(rr.rdata, bytes):
+                return rr.rdata.decode('utf-8', errors='ignore')
+            elif isinstance(rr.rdata, str):
+                return rr.rdata
+            elif hasattr(rr, 'txt_string'):
+                return rr.txt_string
+    return str(rr.rdata) if hasattr(rr, 'rdata') else 'Unknown'

@@ -1,0 +1,20 @@
+source /home/peiying/network_sniffer/sniffer_env/bin/activate
+
+sudo $(which python3) main.py
+
+在Windows用户目录下可修改: C:\Users\<用户名>\.wslconfig
+[wsl2]
+firewall=false
+autoProxy=false
+networkingMode=bridged或mirrored
+vmSwitch=Default Switch
+dhcp=true
+
+在Windows用户目录下可查看代码: \\wsl.localhost\Ubuntu\home\<用户名>
+测试ping(ICMP协议): 选择接口eth0:  ping -s 1000 172.23.0.1 -c 1
+        分片        : ping -s 3000 172.23.0.1 -c 1
+        其中172.23.0.1为Windows主机在WSL2网络中的IP
+        注意: 需要关闭windows防火墙
+DNS 查询(UDP协议): wsl中执行: sudo tcpdump -i any port 53 -nn -v
+            选择接口lo, wsl中另起终端: nslookup www.baidu.com
+HTTP 请求(TCP协议): 选择接口eth0: curl -v http://httpbin.org/get

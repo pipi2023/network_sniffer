@@ -1,12 +1,13 @@
 # 协议解析模块
-from scapy.all import Ether, IP, ARP, ICMP, TCP, UDP
+from scapy.all import Ether, IP, ARP, ICMP, TCP, UDP, DNS, DNSQR, DNSRR, Raw
 from datetime import datetime
 import json
+from utils.helpers import get_dns_opcode, get_dns_rcode, get_dns_type, get_dns_class, format_dns_rdata
 
 class ProtocolParser:
     """协议解析模块"""
     def __init__(self):
-        self.supported_protocols = ['Ethernet', 'IP', 'ARP', 'ICMP', 'TCP', 'UDP']
+        self.supported_protocols = ['Ethernet', 'IP', 'ARP', 'ICMP', 'TCP', 'UDP', 'DNS']
 
     def parse_packet(self, packet, packet_number):
         """解析数据包"""
@@ -49,13 +50,163 @@ class ProtocolParser:
             parsed_data['layers']['UDP'] = self._parse_udp(packet[UDP])
             parsed_data['protocol'] = 'UDP'
 
+        # # 进入 DNS 解析
+        # dns_parsed = False
+
+        # # 首先检查是否有DNS层
+        # if packet.haslayer(DNS):
+        #     parsed_data['protocol'] = 'DNS'
+        #     parsed_data['layers']['DNS'] = self._parse_dns(packet[DNS])
+        #     dns_parsed = True
+            
+        #     # 更新传输层描述
+        #     if packet.haslayer(UDP):
+        #         if 'UDP' in parsed_data['layers']:
+        #             parsed_data['layers']['UDP']['description'] += " [DNS]"
+        #     elif packet.haslayer(TCP):
+        #         if 'TCP' in parsed_data['layers']:
+        #             parsed_data['layers']['TCP']['description'] += " [DNS]"
+        
+        # # 如果没有DNS层，但端口是53，尝试解析DNS
+        # if not dns_parsed:
+        #     if packet.haslayer(UDP) and (packet[UDP].sport == 53 or packet[UDP].dport == 53):
+        #         parsed_data['protocol'] = 'DNS/UDP'
+        #         dns_data = self._try_parse_dns_from_payload(packet)
+        #         if dns_data:
+        #             parsed_data['layers']['DNS'] = dns_data
+        #             if 'UDP' in parsed_data['layers']:
+        #                 parsed_data['layers']['UDP']['description'] += " [DNS]"
+        #         else:
+        #             parsed_data['layers']['DNS'] = {'status': 'Raw DNS data (parse failed)', 'port_info': f"Port 53 traffic"}
+
+        #     elif packet.haslayer(TCP) and (packet[TCP].sport == 53 or packet[TCP].dport == 53):
+        #         parsed_data['protocol'] = 'DNS/TCP'
+        #         dns_data = self._try_parse_dns_from_payload(packet)
+        #         if dns_data:
+        #             parsed_data['layers']['DNS'] = dns_data
+        #             if 'TCP' in parsed_data['layers']:
+        #                 parsed_data['layers']['TCP']['description'] += " [DNS]"
+        #         else:
+        #             parsed_data['layers']['DNS'] = {'note': 'TCP DNS (needs stream reassembly)', 'port_info': f"Port 53 traffic"}
+
         # 解析负载数据
         parsed_data['payload'] = self._parse_payload(packet)
 
         # 生成十六进制转储
         parsed_data['hexdump'] = self._generate_hexdump(packet)
-
+        return parsed_data
     
+    def _try_parse_dns_from_payload(self, packet):
+        """尝试从负载解析DNS数据"""
+        try:
+            # 获取原始负载
+            if packet.haslayer(Raw):
+                raw_data = packet[Raw].load
+                
+                # 对于TCP DNS，可能需要跳过长度字段
+                if packet.haslayer(TCP):
+                    # DNS over TCP有2字节的长度字段
+                    if len(raw_data) > 2:
+                        raw_data = raw_data[2:]  # 跳过长度字段
+
+                # 尝试用Scapy解析
+                if raw_data:
+                    dns = DNS(raw_data)
+                    if dns:
+                        return self._parse_dns(dns)
+        except Exception as e:
+            print(f"DNS解析失败: {e}")
+        
+        # 如果解析失败，返回基本信息
+        return None
+
+    def _parse_dns(self, dns):
+        """解析DNS数据包"""
+        dns_info = {
+            'id': dns.id,
+            'qr': 'Response' if dns.qr else 'Query',
+            'opcode': get_dns_opcode(dns.opcode),
+            'aa': dns.aa,
+            'tc': dns.tc,
+            'rd': dns.rd,
+            'ra': dns.ra,
+            'z': dns.z,
+            'ad': dns.ad,
+            'cd': dns.cd,
+            'rcode': get_dns_rcode(dns.rcode),
+            'qdcount': dns.qdcount,
+            'ancount': dns.ancount,
+            'nscount': dns.nscount,
+            'arcount': dns.arcount,
+        }
+        
+        # 查询部分
+        if dns.qd and dns.qdcount > 0:
+            queries = []
+            for i in range(min(dns.qdcount, len(dns.qd))):
+                q = dns.qd[i]
+                query_info = {
+                    'name': q.qname.decode('utf-8', errors='ignore') if isinstance(q.qname, bytes) else str(q.qname),
+                    'type': get_dns_type(q.qtype),
+                    'class': get_dns_class(q.qclass)
+                }
+                queries.append(query_info)
+            dns_info['queries'] = queries
+        
+        # 回答部分
+        if dns.an and dns.ancount > 0:
+            answers = []
+            for i in range(min(dns.ancount, len(dns.an))):
+                a = dns.an[i]
+                answer_info = {
+                    'name': a.rrname.decode('utf-8', errors='ignore') if isinstance(a.rrname, bytes) else str(a.rrname),
+                    'type': get_dns_type(a.type),
+                    'class': get_dns_class(a.rclass),
+                    'ttl': a.ttl,
+                    'data': format_dns_rdata(a)
+                }
+                answers.append(answer_info)
+            dns_info['answers'] = answers
+
+        # 权威部分
+        if dns.ns and dns.nscount > 0:
+            authorities = []
+            for i in range(min(dns.nscount, len(dns.ns))):
+                ns = dns.ns[i]
+                ns_info = {
+                    'name': ns.rrname.decode('utf-8', errors='ignore') if isinstance(ns.rrname, bytes) else str(ns.rrname),
+                    'type': get_dns_type(ns.type),
+                    'class': get_dns_class(ns.rclass),
+                    'ttl': ns.ttl,
+                    'data': format_dns_rdata(ns)
+                }
+                authorities.append(ns_info)
+            dns_info['authorities'] = authorities
+
+        # 附加部分
+        if dns.ar and dns.arcount > 0:
+            additionals = []
+            for i in range(min(dns.arcount, len(dns.ar))):
+                ar = dns.ar[i]
+                ar_info = {
+                    'name': ar.rrname.decode('utf-8', errors='ignore') if isinstance(ar.rrname, bytes) else str(ar.rrname),
+                    'type': get_dns_type(ar.type),
+                    'class': get_dns_class(ar.rclass),
+                    'ttl': ar.ttl,
+                    'data': format_dns_rdata(ar)
+                }
+                additionals.append(ar_info)
+            dns_info['additionals'] = additionals
+        
+        # 生成描述
+        description = f"DNS {dns_info['qr']}"
+        if 'queries' in dns_info and dns_info['queries']:
+            query_names = [q['name'] for q in dns_info['queries']]
+            description += f" for {', '.join(query_names)}"
+        
+        dns_info['description'] = description
+        return dns_info
+
     def _parse_ethernet(self, ether):
         """解析以太网帧"""
         return {
@@ -67,7 +218,44 @@ class ProtocolParser:
 
     def _parse_ip(self, ip):
         """解析IP数据包"""
-        return{
+        description = f"{ip.src} -> {ip.dst} Proto: {ip.proto}"
+        
+        # 检查是否为分片
+        is_fragment = ip.flags.MF or ip.frag > 0
+        
+        if is_fragment:
+            # 计算分片序号
+            fragment_number = (ip.frag // 8) + 1  # ip.frag是8字节为单位，+1从1开始计数
+            
+            # 判断分片状态
+            if ip.frag == 0:
+                fragment_info = "First fragment"
+            elif ip.flags.MF:
+                fragment_info = f"Middle fragment {fragment_number}"
+            else:
+                fragment_info = f"Last fragment {fragment_number}"
+            
+            # 检查是否为ICMP分片
+            if ip.proto == 1:  # ICMP协议号为1
+                # 判断第一个分片是否包含ICMP头
+                if ip.frag == 0:
+                    # 第一个分片包含ICMP头
+                    if ip.haslayer(ICMP):
+                        icmp = ip[ICMP]
+                        icmp_type = icmp.type
+                        type_map = {0: 'Echo Reply', 8: 'Echo Request'}
+                        icmp_desc = type_map.get(icmp_type, f'ICMP Type {icmp_type}')
+                        description = f"{ip.src} > {ip.dst} icmp {icmp_desc} fragment {fragment_number}"
+                    else:
+                        description = f"{ip.src} > {ip.dst} icmp frag:{fragment_number}"
+                else:
+                    # 后续分片只显示IP信息
+                    description = f"{ip.src} > {ip.dst} icmp frag:{fragment_number}"
+            else:
+                # 非ICMP分片
+                description = f"{ip.src} > {ip.dst} {self._get_proto_name(ip.proto)} fragment {fragment_info}"
+        
+        return {
             'version': ip.version,
             'header_length': ip.ihl * 4,
             'tos': ip.tos,
@@ -81,11 +269,28 @@ class ProtocolParser:
             'fragment_offset': ip.frag,
             'ttl': ip.ttl,
             'protocol': ip.proto,
+            'protocol_name': self._get_proto_name(ip.proto),
             'header_checksum': f"0x{ip.chksum:04x}",
             'source_ip': ip.src,
             'destination_ip': ip.dst,
-            'description': f"{ip.src} -> {ip.dst} Proto: {ip.proto}"
+            'is_fragment': is_fragment,
+            'fragment_number': (ip.frag // 8) + 1 if is_fragment else 0,
+            'fragment_info': "First fragment" if ip.frag == 0 else 
+                            "Middle fragment" if ip.flags.MF else 
+                            "Last fragment" if ip.frag > 0 else "Not a fragment",
+            'description': description
         }
+    
+    def _get_proto_name(self, proto_num):
+        """将协议号转换为协议名称"""
+        proto_map = {
+            1: 'ICMP',
+            2: 'IGMP',
+            6: 'TCP',
+            17: 'UDP',
+            58: 'ICMPv6'
+        }
+        return proto_map.get(proto_num, f'Proto-{proto_num}')
 
     def _parse_arp(self, arp):
         """解析ARP数据包"""
@@ -103,6 +308,21 @@ class ProtocolParser:
             'description': f"{arp.psrc} -> {arp.pdst} ({op_map.get(arp.op, 'Unknown')})"
         }
     
+    # def _parse_icmp(self, icmp):
+    #     """解析ICMP数据包"""
+    #     type_map = {
+    #         0: 'Echo Reply',
+    #         3: 'Destination Unreachable',
+    #         8: 'Echo Request',
+    #         11: 'Time Exceeded'
+    #     }
+    #     return{
+    #         'type': type_map.get(icmp.type, f'Unknown({icmp.type})'),
+    #         'code': icmp.code,
+    #         'checksum': f"0x{icmp.chksum:04x}",
+    #         'description': type_map.get(icmp.type, f'ICMP Type {icmp.type}')
+    #     }
+
     def _parse_icmp(self, icmp):
         """解析ICMP数据包"""
         type_map = {
@@ -111,11 +331,22 @@ class ProtocolParser:
             8: 'Echo Request',
             11: 'Time Exceeded'
         }
+        
+        icmp_type = type_map.get(icmp.type, f'Unknown({icmp.type})')
+        description = f"{icmp_type}"
+        
+        # 如果是echo请求或回复，显示更多信息
+        if icmp.type in [0, 8] and hasattr(icmp, 'id') and hasattr(icmp, 'seq'):
+            description = f"{icmp_type} id=0x{icmp.id:04x} seq={icmp.seq}"
+        
         return{
-            'type': type_map.get(icmp.type, f'Unknown({icmp.type})'),
+            'type': icmp_type,
+            'type_code': icmp.type,
             'code': icmp.code,
             'checksum': f"0x{icmp.chksum:04x}",
-            'description': type_map.get(icmp.type, f'ICMP Type {icmp.type}')
+            'id': getattr(icmp, 'id', None),
+            'sequence': getattr(icmp, 'seq', None),
+            'description': description
         }
 
     def _parse_tcp(self, tcp):

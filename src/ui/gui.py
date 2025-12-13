@@ -2,12 +2,14 @@
 from datetime import datetime
 from functools import partial
 import sys
+import threading
 from PyQt5.QtWidgets import (QApplication, QMainWindow, QVBoxLayout, QHBoxLayout, 
                              QWidget, QPushButton, QComboBox, QTableWidget, 
                              QTableWidgetItem, QTextEdit, QSplitter, QLabel,
                              QTabWidget, QHeaderView, QProgressBar, QMessageBox)
 from PyQt5.QtCore import QTimer, Qt, pyqtSignal
 from PyQt5.QtGui import QFont, QColor
+import time
 
 class MainWindow(QMainWindow):
     def __init__(self, packet_sniffer, packer_parser):
@@ -185,23 +187,41 @@ class MainWindow(QMainWindow):
 
     def start_capture(self):
         """开始捕获数据包"""
+        print(f"GUI: 开始捕获，当前线程数: {threading.active_count()}")
+        self.stop_capture()
+        time.sleep(0.1)
+        self.clear_data()
+
         if self.interface_combo.currentIndex() == -1:
             QMessageBox.warning(self, "警告", "请先选择一个网络接口")
             return
         
         interface_name = self.interface_combo.currentData()
-        filter_str = self.filter_edit.currentText()
+        # 获取并清理过滤条件
+        filter_str = self.filter_edit.currentText().strip()  # 去除前后空格
+        
+        # 如果过滤条件为空字符串，设置为None
+        if not filter_str:
+            filter_str = ""
+        
+        print(f"GUI: 接口={interface_name}, 过滤条件='{filter_str}'")
+        
         self.current_interface = interface_name
-        self.current_filter = filter_str
+        self.current_filter = filter_str if filter_str else "无"
+        print(f"开始抓包 - 接口: {interface_name}, 过滤: {self.current_filter}")
 
         self.capture_stats.update({
             'packet_count': 0,
+            'bytes_received': 0,
             'start_time': datetime.now(),
             'interface': interface_name,
-            'filter': filter_str
+            'filter': self.current_filter
         })
 
-        # 设置数据包处理回调
+        # 清空数据
+        self.clear_data()
+        
+        # 开始新的捕获
         success = self.packet_sniffer.start_sniffing(
             interface=interface_name,
             packet_handler=self.on_packet_received,
@@ -222,9 +242,13 @@ class MainWindow(QMainWindow):
 
     def stop_capture(self):
         """停止捕获数据包"""
-        self.packet_sniffer.stop_sniffing()
         self.start_button.setEnabled(True)
         self.stop_button.setEnabled(False)
+
+        # 停止嗅探器
+        if hasattr(self, 'packet_sniffer'):
+            self.packet_sniffer.stop_sniffing()
+            
         if self.capture_stats['start_time']:
             duration = datetime.now() - self.capture_stats['start_time']
             duration_str = str(duration).split('.')[0]
@@ -441,26 +465,23 @@ class MainWindow(QMainWindow):
 
             # 数据包统计
             stats_lines.append(f"\n【数据包统计】")
-            total_packets = stats.get('total_packets', 0)
-            stats_lines.append(f"  总数据包数: {total_packets}")
-
-            # 流量统计
             try:
-                traffic_summary = self.packet_sniffer.get_traffic_summary()
-            except Exception as e:
-                print(f"获取流量摘要失败: {e}")
-                traffic_summary = {
-                    'packets': stats.get('total_packets', 0),
-                    'bytes': 0,
-                    'traffic_formatted': '0 B',
-                    'protocols': stats.get('protocols', {})
-                }
+                # 将统计信息转换为数值类型
+                total_packets = int(stats.get('total_packets', 0))
+                bytes_received = int(stats.get('bytes_received', 0))
+            except (ValueError, TypeError):
+                total_packets = 0
+                bytes_received = 0
+                
+            stats_lines.append(f"  总数据包数: {total_packets}")
+            stats_lines.append(f"  总字节数: {bytes_received}")
+
             # 速率信息
             if self.capture_stats.get('start_time') and total_packets > 0:
                 duration_seconds = (datetime.now() - self.capture_stats['start_time']).total_seconds()
                 if duration_seconds > 0:
                     packets_per_second = total_packets / duration_seconds
-                    bytes_per_second = traffic_summary['bytes'] / duration_seconds
+                    bytes_per_second = bytes_received / duration_seconds  # 使用转换后的数值
                     
                     stats_lines.append(f"\n【捕获速率】")
                     stats_lines.append(f"  包速率: {packets_per_second:.2f} 包/秒")
@@ -482,7 +503,16 @@ class MainWindow(QMainWindow):
                         bps_str = f"{bits_per_second / 1000000:.2f} Mbps"
                     
                     stats_lines.append(f"  数据速率: {bandwidth_str}")
-                    stats_lines.append(f"  带宽占用: {bps_str}")    
+                    stats_lines.append(f"  带宽占用: {bps_str}")
+
+            # 协议统计
+            stats_lines.append(f"\n【协议分布】")
+            try:
+                protocols = stats.get('protocols', {})
+                for protocol, count in protocols.items():
+                    stats_lines.append(f"  {protocol}: {count}")
+            except Exception as e:
+                stats_lines.append(f"  协议信息: 获取失败 ({e})")
 
             stats_text = '\n'.join(stats_lines)
             self.stats_text.setText(stats_text)
@@ -490,4 +520,6 @@ class MainWindow(QMainWindow):
         except Exception as e:
             error_msg = f"更新统计信息时出错:\n{str(e)}"
             print(f"统计信息更新错误: {e}")
+            import traceback
+            traceback.print_exc()
             self.stats_text.setText(error_msg)
