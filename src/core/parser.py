@@ -9,7 +9,7 @@ class ProtocolParser:
     def __init__(self):
         self.supported_protocols = ['Ethernet', 'IP', 'ARP', 'ICMP', 'TCP', 'UDP', 'DNS']
 
-    def parse_packet(self, packet, packet_number):
+    def parse_packet(self, packet, packet_number, is_reassembled=False):
         """解析数据包"""
         parsed_data = {
             'number': packet_number,
@@ -18,10 +18,33 @@ class ProtocolParser:
             'protocol': 'Unknown',
             'summary': '',
             'layers': {},
-            'hexdump': '' # 十六进制转储
+            'hexdump': '', # 十六进制转储
+            'is_fragment': False,
+            'is_reassembled': is_reassembled,
+            'fragment_info': None
         }
 
-        parsed_data['summary'] = packet.summary()
+        # 添加重组标记
+        if is_reassembled:
+            parsed_data['summary'] = f"[Reassembled] {packet.summary()}"
+        else:
+            parsed_data['summary'] = packet.summary()
+
+        # 检查是否为IP分片
+        if packet.haslayer(IP):
+            ip = packet[IP]
+            is_fragment = ip.flags.MF or ip.frag > 0
+            parsed_data['is_fragment'] = is_fragment
+            
+            if is_fragment:
+                fragment_number = (ip.frag // 8) + 1
+                if ip.frag == 0:
+                    fragment_info = "First fragment"
+                elif ip.flags.MF:
+                    fragment_info = f"Middle fragment {fragment_number}"
+                else:
+                    fragment_info = f"Last fragment {fragment_number}"
+                parsed_data['fragment_info'] = fragment_info
 
         # 数据链路层 - Ethernet
         if packet.haslayer(Ether):
@@ -30,68 +53,69 @@ class ProtocolParser:
 
         # 网络层 - IP/ARP/ICMP
         if packet.haslayer(IP):
-            parsed_data['layers']['IP'] = self._parse_ip(packet[IP])
+            parsed_data['layers']['IP'] = self._parse_ip(packet[IP], is_reassembled)
             parsed_data['protocol'] = 'IP'
             
+            # 根据IP层信息确定协议名称
+            if packet.haslayer(ICMP):
+                parsed_data['protocol'] = 'ICMP'
+            elif packet.haslayer(TCP):
+                parsed_data['protocol'] = 'TCP'
+            elif packet.haslayer(UDP):
+                parsed_data['protocol'] = 'UDP'
+
         if packet.haslayer(ARP):
             parsed_data['layers']['ARP'] = self._parse_arp(packet[ARP])
             parsed_data['protocol'] = 'ARP'
             
         if packet.haslayer(ICMP):
             parsed_data['layers']['ICMP'] = self._parse_icmp(packet[ICMP])
-            parsed_data['protocol'] = 'ICMP'
+            # parsed_data['protocol'] = 'ICMP'
 
         # 传输层 - TCP/UDP    
         if packet.haslayer(TCP):
             parsed_data['layers']['TCP'] = self._parse_tcp(packet[TCP])
-            parsed_data['protocol'] = 'TCP'
+            # parsed_data['protocol'] = 'TCP'
             
         if packet.haslayer(UDP):
             parsed_data['layers']['UDP'] = self._parse_udp(packet[UDP])
-            parsed_data['protocol'] = 'UDP'
-
-        # # 进入 DNS 解析
-        # dns_parsed = False
-
-        # # 首先检查是否有DNS层
-        # if packet.haslayer(DNS):
-        #     parsed_data['protocol'] = 'DNS'
-        #     parsed_data['layers']['DNS'] = self._parse_dns(packet[DNS])
-        #     dns_parsed = True
-            
-        #     # 更新传输层描述
-        #     if packet.haslayer(UDP):
-        #         if 'UDP' in parsed_data['layers']:
-        #             parsed_data['layers']['UDP']['description'] += " [DNS]"
-        #     elif packet.haslayer(TCP):
-        #         if 'TCP' in parsed_data['layers']:
-        #             parsed_data['layers']['TCP']['description'] += " [DNS]"
-        
-        # # 如果没有DNS层，但端口是53，尝试解析DNS
-        # if not dns_parsed:
-        #     if packet.haslayer(UDP) and (packet[UDP].sport == 53 or packet[UDP].dport == 53):
-        #         parsed_data['protocol'] = 'DNS/UDP'
-        #         dns_data = self._try_parse_dns_from_payload(packet)
-        #         if dns_data:
-        #             parsed_data['layers']['DNS'] = dns_data
-        #             if 'UDP' in parsed_data['layers']:
-        #                 parsed_data['layers']['UDP']['description'] += " [DNS]"
-        #         else:
-        #             parsed_data['layers']['DNS'] = {'status': 'Raw DNS data (parse failed)', 'port_info': f"Port 53 traffic"}
-
-        #     elif packet.haslayer(TCP) and (packet[TCP].sport == 53 or packet[TCP].dport == 53):
-        #         parsed_data['protocol'] = 'DNS/TCP'
-        #         dns_data = self._try_parse_dns_from_payload(packet)
-        #         if dns_data:
-        #             parsed_data['layers']['DNS'] = dns_data
-        #             if 'TCP' in parsed_data['layers']:
-        #                 parsed_data['layers']['TCP']['description'] += " [DNS]"
-        #         else:
-        #             parsed_data['layers']['DNS'] = {'note': 'TCP DNS (needs stream reassembly)', 'port_info': f"Port 53 traffic"}
+            # parsed_data['protocol'] = 'UDP'
 
         # 解析负载数据
         parsed_data['payload'] = self._parse_payload(packet)
 
+        # 生成摘要信息
+        summary_parts = []
+        if packet.haslayer(Ether):
+            summary_parts.append('Ether')
+        if packet.haslayer(IP):
+            summary_parts.append('IP')
+        if packet.haslayer(ICMP):
+            summary_parts.append('ICMP')
+        elif packet.haslayer(TCP):
+            summary_parts.append('TCP')
+        elif packet.haslayer(UDP):
+            summary_parts.append('UDP')
+        if packet.haslayer(Raw):
+            summary_parts.append('Raw')
+        
+        base_summary = ' / '.join(summary_parts)
+
+        # 如果是重组包，在摘要前添加标记
+        if is_reassembled:
+            parsed_data['summary'] = f"[Reassembled] {base_summary}"
+        elif parsed_data['is_fragment']:
+            # 分片包显示分片信息
+            ip = packet[IP]
+            if ip.frag == 0 and packet.haslayer(ICMP):
+                # 第一个分片包含ICMP头
+                parsed_data['summary'] = base_summary
+            else:
+                # 后续分片不包含上层协议头
+                parsed_data['summary'] = f"Ether / IP"
+        else:
+            parsed_data['summary'] = base_summary
+            
         # 生成十六进制转储
         parsed_data['hexdump'] = self._generate_hexdump(packet)
         return parsed_data
@@ -216,46 +240,65 @@ class ProtocolParser:
             'description': f"{ether.src} -> {ether.dst}"
         }
 
-    def _parse_ip(self, ip):
+    def _parse_ip(self, ip, is_reassembled=False):
         """解析IP数据包"""
         description = f"{ip.src} -> {ip.dst} Proto: {ip.proto}"
         
         # 检查是否为分片
         is_fragment = ip.flags.MF or ip.frag > 0
         
-        if is_fragment:
+        if is_fragment and not is_reassembled:
             # 计算分片序号
             fragment_number = (ip.frag // 8) + 1  # ip.frag是8字节为单位，+1从1开始计数
             
             # 判断分片状态
             if ip.frag == 0:
                 fragment_info = "First fragment"
+
+                # 第一个分片包含ICMP头
+                if ip.haslayer(ICMP):
+                    icmp = ip[ICMP]
+                    icmp_type = icmp.type
+                    type_map = {0: 'Echo Reply', 8: 'Echo Request'}
+                    icmp_desc = type_map.get(icmp_type, f'icmp-type-{icmp_type}')
+                    description = f"{ip.src} > {ip.dst} {icmp_desc} 0"
+                else:
+                    description = f"{ip.src} > {ip.dst} {self._get_proto_name(ip.proto)}"
             elif ip.flags.MF:
                 fragment_info = f"Middle fragment {fragment_number}"
+                description = f"{ip.src} > {ip.dst} {self._get_proto_name(ip.proto)} frag:{fragment_number}"
             else:
                 fragment_info = f"Last fragment {fragment_number}"
-            
-            # 检查是否为ICMP分片
-            if ip.proto == 1:  # ICMP协议号为1
-                # 判断第一个分片是否包含ICMP头
-                if ip.frag == 0:
-                    # 第一个分片包含ICMP头
-                    if ip.haslayer(ICMP):
-                        icmp = ip[ICMP]
-                        icmp_type = icmp.type
-                        type_map = {0: 'Echo Reply', 8: 'Echo Request'}
-                        icmp_desc = type_map.get(icmp_type, f'ICMP Type {icmp_type}')
-                        description = f"{ip.src} > {ip.dst} icmp {icmp_desc} fragment {fragment_number}"
-                    else:
-                        description = f"{ip.src} > {ip.dst} icmp frag:{fragment_number}"
-                else:
-                    # 后续分片只显示IP信息
-                    description = f"{ip.src} > {ip.dst} icmp frag:{fragment_number}"
-            else:
-                # 非ICMP分片
-                description = f"{ip.src} > {ip.dst} {self._get_proto_name(ip.proto)} fragment {fragment_info}"
+                description = f"{ip.src} > {ip.dst} {self._get_proto_name(ip.proto)} frag:{fragment_number}"
         
-        return {
+        elif not is_fragment:
+            # 不是分片包
+            fragment_info = "Not a fragment"
+            if ip.haslayer(ICMP):
+                icmp = ip[ICMP]
+                icmp_type = icmp.type
+                type_map = {0: 'echo-reply', 8: 'echo-request'}
+                icmp_desc = type_map.get(icmp_type, f'icmp-type-{icmp_type}')
+                description = f"{ip.src} > {ip.dst} {icmp_desc} 0"
+            else:
+                description = f"{ip.src} -> {ip.dst} Proto: {ip.proto}"
+        else:
+            # 重组包
+            fragment_info = "Reassembled"
+            if ip.haslayer(ICMP):
+                icmp = ip[ICMP]
+                icmp_type = icmp.type
+                type_map = {0: 'echo-reply', 8: 'echo-request'}
+                icmp_desc = type_map.get(icmp_type, f'icmp-type-{icmp_type}')
+                description = f"{ip.src} > {ip.dst} {icmp_desc} 0"
+            else:
+                description = f"{ip.src} -> {ip.dst} Proto: {ip.proto}"
+
+        # 如果是重组包，添加标记
+        if is_reassembled:
+            description = f"[Reassembled] {description}"
+
+        result = {
             'version': ip.version,
             'header_length': ip.ihl * 4,
             'tos': ip.tos,
@@ -275,11 +318,12 @@ class ProtocolParser:
             'destination_ip': ip.dst,
             'is_fragment': is_fragment,
             'fragment_number': (ip.frag // 8) + 1 if is_fragment else 0,
-            'fragment_info': "First fragment" if ip.frag == 0 else 
-                            "Middle fragment" if ip.flags.MF else 
-                            "Last fragment" if ip.frag > 0 else "Not a fragment",
+            'fragment_info': fragment_info,
+            'is_reassembled': is_reassembled,
             'description': description
         }
+        
+        return result
     
     def _get_proto_name(self, proto_num):
         """将协议号转换为协议名称"""

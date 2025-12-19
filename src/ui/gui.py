@@ -323,38 +323,67 @@ class MainWindow(QMainWindow):
             row = self.packet_table.rowCount()
             self.packet_table.insertRow(row)
             
-            # 安全地获取数据，避免KeyError
+            # 安全地获取数据
             number = str(packet.get('number', 'N/A'))
             timestamp = packet.get('timestamp', 'N/A')
-            protocol = packet.get('protocol', 'Unknown')
             length = str(packet.get('length', 0))
+            
+            # 确定协议显示
+            protocol = packet.get('protocol', 'Unknown')
+            is_reassembled = packet.get('reassembled', False)
+            is_fragment = packet.get('is_fragment', False)
+            
+            # 设置协议列显示
+            if is_reassembled:
+                protocol_display = f"[重组] {protocol}"
+            elif is_fragment:
+                protocol_display = f"[分片] {protocol}"
+            else:
+                protocol_display = protocol
+            
+            # 获取地址信息
+            src_addr = packet.get('layers', {}).get('IP', {}).get('source_ip', 'N/A')
+            dst_addr = packet.get('layers', {}).get('IP', {}).get('destination_ip', 'N/A')
+            
+            # 获取端口信息
+            ports = 'N/A'
+            if 'TCP' in packet.get('layers', {}):
+                tcp = packet['layers']['TCP']
+                ports = f"{tcp.get('source_port', '')} → {tcp.get('destination_port', '')}"
+            elif 'UDP' in packet.get('layers', {}):
+                udp = packet['layers']['UDP']
+                ports = f"{udp.get('source_port', '')} → {udp.get('destination_port', '')}"
+            
+            # 获取描述（摘要）
             summary = packet.get('summary', '')
             
             # 设置表格项
             self.packet_table.setItem(row, 0, QTableWidgetItem(number))
             self.packet_table.setItem(row, 1, QTableWidgetItem(timestamp))
+            self.packet_table.setItem(row, 2, QTableWidgetItem(str(src_addr)))
+            self.packet_table.setItem(row, 3, QTableWidgetItem(str(dst_addr)))
             
-            # 安全地获取地址信息
-            try:
-                src_addr = self._get_source_address(packet)
-                dst_addr = self._get_destination_address(packet)
-            except Exception:
-                src_addr = 'N/A'
-                dst_addr = 'N/A'
+            # 协议列
+            protocol_item = QTableWidgetItem(protocol_display)
+            if is_reassembled:
+                protocol_item.setForeground(QColor(0, 128, 0))  # 绿色
+                protocol_item.setBackground(QColor(220, 255, 220))  # 浅绿背景
+            elif is_fragment:
+                protocol_item.setForeground(QColor(255, 140, 0))  # 橙色
+            self.packet_table.setItem(row, 4, protocol_item)
             
-            self.packet_table.setItem(row, 2, QTableWidgetItem(src_addr))
-            self.packet_table.setItem(row, 3, QTableWidgetItem(dst_addr))
-            self.packet_table.setItem(row, 4, QTableWidgetItem(protocol))
             self.packet_table.setItem(row, 5, QTableWidgetItem(length))
             
-            # 获取端口信息
-            try:
-                ports = self._get_port_info(packet)
-            except Exception:
-                ports = 'N/A'
+            # 端口列
+            self.packet_table.setItem(row, 6, QTableWidgetItem(str(ports)))
             
-            self.packet_table.setItem(row, 6, QTableWidgetItem(ports))
-            self.packet_table.setItem(row, 7, QTableWidgetItem(summary))
+            # 描述列
+            description_item = QTableWidgetItem(summary)
+            if is_reassembled:
+                description_item.setBackground(QColor(220, 255, 220))  # 浅绿背景
+            elif is_fragment:
+                description_item.setBackground(QColor(255, 245, 220))  # 浅橙背景
+            self.packet_table.setItem(row, 7, description_item)
             
             # 自动滚动
             self.packet_table.scrollToBottom()

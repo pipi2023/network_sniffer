@@ -2,7 +2,7 @@
 import threading
 import time
 import scapy.all as scapy
-from scapy.all import sniff, get_if_list
+from scapy.all import sniff, get_if_list, IP
 from scapy.config import conf
 from src.utils.helpers import get_interface_info, guess_protocol
 
@@ -96,7 +96,7 @@ class PacketSniffer:
         time.sleep(0.2)
         
         return True
-  
+
     def _sniff_callback_wrapper(self, packet):
         """包装回调函数，确保线程安全"""
         if not self.is_sniffing:
@@ -284,10 +284,10 @@ class PacketSniffer:
                     protocol = "ICMP"
             print(f"DEBUG: 收到 {protocol} 数据包")
 
-        if packet is None:
-            if self.debug_mode:
-                print("DEBUG: 收到None数据包, 跳过")
-            return
+        # if packet is None:
+        #     if self.debug_mode:
+        #         print("DEBUG: 收到None数据包, 跳过")
+        #     return
         
         try:
             if self.debug_mode:
@@ -318,13 +318,33 @@ class PacketSniffer:
         except Exception as e:
             if self.debug_mode:
                 print(f"DEBUG: 处理数据包基础信息时出错: {e}")
-            return
-        
+            return  
+
+        # 首先检查是否为IP分片
+        is_fragment = False
+        try:
+            if packet.haslayer(IP):
+                ip = packet[IP]
+                is_fragment = ip.flags.MF or ip.frag > 0
+                if self.debug_mode and is_fragment:
+                    print(f"DEBUG: 检测到分片包: ID={ip.id}, frag={ip.frag}, MF={ip.flags.MF}")
+        except Exception as e:
+            if self.debug_mode:
+                print(f"DEBUG: 检查分片时出错: {e}")
+
         # 处理IP分片重组
         reassembled_packet = None
-        if self.ip_reassembler and hasattr(self.ip_reassembler, 'process_packet'):
+        is_reassembled = False
+
+        if is_fragment and self.ip_reassembler and hasattr(self.ip_reassembler, 'process_packet'):
             try:
                 reassembled_packet = self.ip_reassembler.process_packet(packet)
+                if reassembled_packet:
+                    is_reassembled = True
+                    if self.debug_mode:
+                        print(f"DEBUG: 成功重组数据包！原始包: {packet.summary()}")
+                        print(f"DEBUG: 重组后包: {reassembled_packet.summary()}")
+                        print(f"DEBUG: 原始长度: {len(packet)}, 重组后长度: {len(reassembled_packet)}")
             except Exception as e:
                 if self.debug_mode:
                     print(f"DEBUG: 分片重组时出错: {e}")
@@ -338,104 +358,55 @@ class PacketSniffer:
         try:
             # 确保packet_parser存在且可调用
             if self.packet_parser and hasattr(self.packet_parser, 'parse_packet'):
-                parsed_packet = self.packet_parser.parse_packet(packet, self.packet_count)
+                parsed_packet = self.packet_parser.parse_packet(packet_to_parse, self.packet_count, is_reassembled=is_reassembled)
                 
                 if self.debug_mode:
                     print(f"DEBUG: 解析器返回类型: {type(parsed_packet)}")
                     print(f"DEBUG: 解析器返回值: {parsed_packet}")
 
-                # 如果是分片包，在描述中添加标记
-                from scapy.all import IP    
-                if packet.haslayer(IP) and (packet[IP].flags.MF or packet[IP].frag > 0):
-                    ip = packet[IP]
-                    if reassembled_packet:
-                        # 重组成功的包
-                        if 'description' in parsed_packet:
-                            parsed_packet['description'] += " [Reassembled]"
-                        else:
-                            parsed_packet['description'] = "[Reassembled]"
-                    else:
-                        # 分片包（可能未完全重组）
-                        fragment_num = (ip.frag // 8) + 1
-                        if ip.frag == 0:
-                            fragment_info = f"First fragment {fragment_num}"
-                        elif ip.flags.MF:
-                            fragment_info = f"Middle fragment {fragment_num}"
-                        else:
-                            fragment_info = f"Last fragment {fragment_num}"
-                        
-                        if 'description' in parsed_packet:
-                            # 如果是ICMP分片
-                            if ip.proto == 1:  # ICMP协议号
-                                # 检查是否包含ICMP层（第一个分片才有）
-                                if packet.haslayer(scapy.ICMP):
-                                    icmp = packet[scapy.ICMP]
-                                    icmp_type = icmp.type
-                                    type_map = {0: 'Echo Reply', 8: 'Echo Request'}
-                                    icmp_desc = type_map.get(icmp_type, f'ICMP Type {icmp_type}')
-                                    parsed_packet['description'] = f"{ip.src} > {ip.dst} icmp {icmp_desc} {fragment_info}"
-                                else:
-                                    parsed_packet['description'] = f"{ip.src} > {ip.dst} icmp {fragment_info}"
-                            else:
-                                parsed_packet['description'] += f" [{fragment_info}]"
-                        else:
-                            parsed_packet['description'] = fragment_info
-                            
-                # 如果解析器返回None，尝试自己解析
-                if parsed_packet is None:
-                    if self.debug_mode:
-                        print("DEBUG: 解析器返回None，尝试手动解析")
-                    parsed_packet = self._parse_packet_manually(packet, packet_length)
+                # 如果解析器没有设置重组标记，我们手动设置
+                if is_reassembled:
+                    parsed_packet['reassembled'] = True
+                    # 确保描述字段正确
+                    if 'summary' in parsed_packet:
+                        if not parsed_packet['summary'].startswith('[Reassembled]'):
+                            parsed_packet['summary'] = f"[Reassembled] {parsed_packet['summary']}"
+                else:
+                    parsed_packet['reassembled'] = False
+                    
             else:
-                if self.debug_mode:
-                    print("DEBUG: 没有可用的解析器，手动解析")
                 parsed_packet = self._parse_packet_manually(packet, packet_length)
+                parsed_packet['reassembled'] = False
                 
         except Exception as e:
             if self.debug_mode:
                 print(f"DEBUG: 解析数据包时出错: {e}")
-                import traceback
-                traceback.print_exc()
             parsed_packet = self._parse_packet_manually(packet, packet_length)
+            parsed_packet['reassembled'] = False
         
-        # 确保parsed_packet是有效的字典
-        if not isinstance(parsed_packet, dict):
-            if self.debug_mode:
-                print(f"DEBUG: parsed_packet不是字典: {type(parsed_packet)}，转换为字典")
-            parsed_packet = self._convert_to_dict(parsed_packet, packet, packet_length)
-        
-        # 确保所有字段都是字符串类型（避免QTableWidgetItem错误）
-        # parsed_packet = self._ensure_string_values(parsed_packet)
-
-        
-        # 更新统计信息
-        try:
-            protocol = parsed_packet.get('protocol', 'Unknown')
-            if protocol not in self.stats['protocols']:
-                self.stats['protocols'][protocol] = 0
-            self.stats['protocols'][protocol] += 1
-        except Exception as e:
-            if self.debug_mode:
-                print(f"DEBUG: 更新统计时出错: {e}")
+        # 确保解析结果包含正确的协议信息
+        if not is_reassembled and packet.haslayer(IP):
+            ip = packet[IP]
+            is_fragment = ip.flags.MF or ip.frag > 0
+            parsed_packet['is_fragment'] = is_fragment
+            
+            if is_fragment:
+                # 分片包：设置正确的协议显示
+                if ip.proto == 1:  # ICMP
+                    parsed_packet['protocol'] = 'ICMP'
+                else:
+                    parsed_packet['protocol'] = 'IP'
         
         # 保存数据包
-        try:
-            self.captured_packets.append(parsed_packet)
-        except Exception as e:
-            if self.debug_mode:
-                print(f"DEBUG: 保存数据包时出错: {e}")
+        self.captured_packets.append(parsed_packet)
         
         # 调用回调函数
         if callable(self.packet_handler):
             try:
-                # 确保传递给回调函数的统计数据也包含字符串
-                # safe_stats = self._ensure_string_values(self.stats.copy())
                 self.packet_handler(parsed_packet, self.stats)
             except Exception as e:
                 if self.debug_mode:
                     print(f"DEBUG: 回调函数执行出错: {e}")
-                    import traceback
-                    traceback.print_exc()
 
     def _create_default_packet(self, packet, length):
         """创建默认的数据包字典"""

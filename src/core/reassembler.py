@@ -1,6 +1,6 @@
 # IP 分片重组模块
 import time
-from scapy.all import IP, Raw
+from scapy.all import IP, Raw, ICMP, Ether
 from collections import defaultdict
 
 class IPReassembler:
@@ -50,41 +50,33 @@ class IPReassembler:
         if not fragments:
             return None
         
+        print(f"DEBUG: 尝试重组 key={key}, 分片数量={len(fragments)}")
+
         offsets = sorted(fragments.keys())
+
+        # 打印所有分片信息
+        for offset in offsets:
+            frag = fragments[offset]
+            print(f"  Offset {offset}: ID={frag.id}, MF={frag.flags.MF}, len={len(frag)}")
+
         # 检查最后一个分片
         last_packet = None
         for offset in offsets:
             if fragments[offset].flags.MF == 0:
                 last_packet = fragments[offset]
+                print(f"DEBUG: 找到最后一个分片 at offset {offset}")
                 break
         
         if not last_packet:
+            print("DEBUG: 没有找到最后一个分片(MF=0), 无法重组")
             return None
-      
-        total_length = last_packet.frag * 8 + (len(last_packet) - last_packet.ihl * 4)
-        coverage = [False] * total_length
-        for offset in offsets:
-            fragment = fragments[offset]
-            ip_header_len = fragment.ihl * 4
-            data_len = len(fragment) - ip_header_len
 
-            if offset + data_len > total_length:
-                return None
+        return self._reassemble_packets(key, offsets)        
             
-            for i in range(data_len):
-                if coverage[offset + i]:
-                    return None # 发现重叠分片
-                coverage[offset + i] = True
-
-        if all(coverage):
-            return self._reassemble_packets(key, offsets)
-        
-        return None
-
     def _reassemble_packets(self, key, offsets):
         """重组数据包"""
         fragments = self.fragments[key]
-    
+        
         # 获取第一个分片作为基础
         first_offset = offsets[0]
         first_fragment = fragments[first_offset]
@@ -97,13 +89,12 @@ class IPReassembler:
                 break
         
         if not last_fragment:
+            print(f"ERROR: 在_reassemble_packets中没有找到最后一个分片")
             return None
         
-        # 计算总数据长度
-        ip_header_len = first_fragment.ihl * 4
-        data_length = 0
+        print(f"DEBUG: 重组 - 第一个分片: offset={first_offset}, 最后一个分片: offset={last_fragment.frag*8}")
         
-        # 计算总数据长度（所有分片的数据部分之和）
+        # 收集所有分片的数据
         reassembled_data = bytearray()
         for offset in sorted(offsets):
             fragment = fragments[offset]
@@ -113,30 +104,61 @@ class IPReassembler:
             if fragment.haslayer(Raw):
                 data = bytes(fragment[Raw])
             else:
-                # 如果没有 Raw 层，可能是其他协议
-                # 获取 IP 负载
+                # 如果没有 Raw 层，获取 IP 负载
                 data = bytes(fragment)[ip_header_len_frag:]
             
+            print(f"DEBUG: 添加分片 offset={offset}, 数据长度={len(data)}")
             reassembled_data.extend(data)
-            data_length += len(data)
         
-        # 创建重组后的包
-        reassembled_packet = IP(bytes(first_fragment))
+        print(f"DEBUG: 总重组数据长度: {len(reassembled_data)}")
         
-        # 更新 IP 头部字段
-        reassembled_packet.len = ip_header_len + data_length
-        reassembled_packet.flags = 0  # 清除分片标志
-        reassembled_packet.frag = 0   # 清除分片偏移
+        # 创建重组后的包 - 正确的方法
+        try:
+            base_ip = first_fragment[IP]
         
-        # 设置负载
-        reassembled_packet.payload = Raw(reassembled_data)
-        
-        # 删除校验和，让 scapy 自动计算
-        del reassembled_packet.chksum
-        if reassembled_packet.haslayer(Raw):
-            del reassembled_packet[Raw].chksum
-        
-        return reassembled_packet
+            # 方法1：手动构建新的IP包（最可靠）
+            # 获取IP头部信息
+            ip_header = bytearray(bytes(base_ip)[:base_ip.ihl * 4])
+            
+            # 更新IP头部中的总长度字段（偏移2-3字节）
+            total_length = len(ip_header) + len(reassembled_data)
+            ip_header[2:4] = total_length.to_bytes(2, 'big')
+            
+            # 清除分片相关标志位（偏移6-7字节）
+            # 第6字节的高3位是标志位，第7字节是分片偏移高8位
+            flags_and_fragment = int.from_bytes(ip_header[6:8], 'big')
+            # 清除MF标志和分片偏移
+            flags_and_fragment &= 0b11111111  # 清除分片偏移高5位
+            flags_and_fragment &= 0b11011111  # 清除MF标志
+            ip_header[6:8] = flags_and_fragment.to_bytes(2, 'big')
+            
+            # 清空校验和（让系统重新计算）
+            ip_header[10:12] = b'\x00\x00'
+            
+            # 构建完整的重组包
+            reassembled_bytes = bytes(ip_header) + reassembled_data
+            
+            # 让scapy解析这个包
+            reassembled_packet = IP(reassembled_bytes)
+            
+            print(f"DEBUG: 重组包创建成功，总长度: {len(reassembled_packet)}")
+            
+            # 重新计算校验和
+            del reassembled_packet.chksum
+            
+            # 添加以太网层（如果有）
+            # if first_fragment.haslayer(Ether):
+            #     eth = Ether(bytes(first_fragment[Ether]))
+            #     reassembled_packet = eth / reassembled_packet
+            #     print(f"DEBUG: 添加Ethernet层")
+            
+            return reassembled_packet
+            
+        except Exception as e:
+            print(f"DEBUG: 重组过程中出错: {e}")
+            import traceback
+            traceback.print_exc()
+            return None
 
 
     def _cleanup_fragments(self):
@@ -157,15 +179,15 @@ class IPReassembler:
         return len(expired_keys)
 
     def get_fragment_info(self):
-         """获取当前分片信息"""
-         info = {}
+        """获取当前分片信息"""
+        info = {}
 
-         for key, fragments in self.fragments.items():
-             src, dst, id = key
-             info[f"{src} -> {dst} (ID: {id})"] = {
-                 'fragment_count': len(fragments),
-                 'offsets': sorted(fragments.keys()),
-                 'age': time.time() - self.creation_times[key]
-             }
+        for key, fragments in self.fragments.items():
+            src, dst, id = key
+            info[f"{src} -> {dst} (ID: {id})"] = {
+                'fragment_count': len(fragments),
+                'offsets': sorted(fragments.keys()),
+                'age': time.time() - self.creation_times[key]
+            }
 
-         return info
+        return info
