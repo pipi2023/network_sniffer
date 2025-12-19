@@ -432,44 +432,133 @@ class MainWindow(QMainWindow):
         if not selected_items:
             return
         
-        row = selected_items[0].row()
-        packet_number = int(self.packet_table.item(row, 0).text())
-        
-        packet = self.packet_sniffer.get_packet(packet_number - 1)
-        if packet:
-            self.display_packet_details(packet)
+        try:
+            row = selected_items[0].row()
+            
+            # 方法1：直接使用行号（推荐）
+            # 因为表格的行号从0开始，正好对应captured_packets的索引
+            packet = self.packet_sniffer.get_packet(row)
+            
+            if packet:
+                print(f"DEBUG: 获取到第{row}行的数据包")
+                print(f"DEBUG: 数据包类型: {type(packet)}")
+                print(f"DEBUG: 数据包键: {list(packet.keys())}")
+                
+                # 检查是否有layers键
+                if 'layers' not in packet:
+                    print(f"DEBUG: 数据包缺少layers键，可能为重组包或手动解析包")
+                    print(f"DEBUG: 数据包内容: {str(packet)[:500]}")
+                self.display_packet_details(packet)
+            else:
+                print(f"无法获取第{row}行的数据包")
+                
+        except Exception as e:
+            print(f"选择数据包时出错: {e}")
+            import traceback
+            traceback.print_exc()
 
     def display_packet_details(self, packet):
         """显示数据包详情"""
-        lines = []
-        lines.append("=== 数据包详情 ===\n")
-        
-        for layer_name, layer_data in packet['layers'].items():
-            lines.append(f"【{layer_name} 层】")
-            
-            for key, value in layer_data.items():
-                if key != 'description':
-                    if isinstance(value, dict):
-                        lines.append(f"  {key}:")
-                        for sub_key, sub_value in value.items():
-                            lines.append(f"    {sub_key}: {sub_value}")
-                    else:
-                        lines.append(f"  {key}: {value}")
-            
-            lines.append(f"  描述: {layer_data.get('description', 'N/A')}")
-            lines.append("")
-        
-        # 原始数据
-        if 'payload' in packet:
-            payload = packet['payload']
-            lines.append("【负载数据】")
-            lines.append(f"  大小: {payload['size']} 字节")
-            lines.append(f"  文本预览: {payload['text'][:200]}")
-            lines.append(f"  十六进制: {payload['hex'][:100]}...")  # 限制长度
+        try:
+            lines = []
+            lines.append("=== 数据包详情 ===\n")
 
-        detail_text = '\n'.join(lines)
-        self.detail_text.setText(detail_text)
-        self.raw_text.setText(packet.get('hexdump', ''))
+            # 基础信息
+            lines.append("【基础信息】")
+            lines.append(f"  编号: {packet.get('number', 'N/A')}")
+            lines.append(f"  时间: {packet.get('timestamp', 'N/A')}")
+            lines.append(f"  长度: {packet.get('length', 0)} 字节")
+            lines.append(f"  协议: {packet.get('protocol', 'Unknown')}")
+
+            # 检查是否为重组包
+            if packet.get('reassembled', False):
+                lines.append("  状态: [重组包]")
+            elif packet.get('is_fragment', False):
+                lines.append("  状态: [分片包]")
+                if 'fragment_info' in packet:
+                    lines.append(f"  分片信息: {packet['fragment_info']}")
+            
+            lines.append("")
+            
+            # 分层信息
+            if 'layers' in packet and packet['layers']:
+                for layer_name, layer_data in packet['layers'].items():
+                    lines.append(f"【{layer_name} 层】")
+                    
+                    if isinstance(layer_data, dict):
+                        for key, value in layer_data.items():
+                            if key != 'description':
+                                if isinstance(value, dict):
+                                    lines.append(f"  {key}:")
+                                    for sub_key, sub_value in value.items():
+                                        lines.append(f"    {sub_key}: {sub_value}")
+                                else:
+                                    lines.append(f"  {key}: {value}")
+                        
+                        # 添加描述
+                        if 'description' in layer_data:
+                            lines.append(f"  描述: {layer_data.get('description', 'N/A')}")
+                    else:
+                        lines.append(f"  数据: {layer_data}")
+                    lines.append("")
+            else:
+                lines.append("【原始数据】")
+                lines.append("  无分层解析数据")
+                lines.append("")
+            
+            # 原始数据/负载
+            if 'payload' in packet:
+                payload = packet['payload']
+                lines.append("【负载数据】")
+                lines.append(f"  大小: {payload.get('size', 0)} 字节")
+                
+                if 'text' in payload:
+                    text_preview = payload['text']
+                    if len(text_preview) > 200:
+                        text_preview = text_preview[:200] + "..."
+                    lines.append(f"  文本预览: {text_preview}")
+                
+                if 'hex' in payload:
+                    hex_preview = payload['hex']
+                    if len(hex_preview) > 100:
+                        hex_preview = hex_preview[:100] + "..."
+                    lines.append(f"  十六进制: {hex_preview}")
+            
+            # 十六进制转储
+            if 'hexdump' in packet and packet['hexdump']:
+                lines.append("\n【十六进制转储】")
+                # 限制显示行数
+                hexdump_lines = packet['hexdump'].split('\n')
+                for i in range(min(20, len(hexdump_lines))):  # 最多显示20行
+                    lines.append(hexdump_lines[i])
+                if len(hexdump_lines) > 20:
+                    lines.append(f"... 还有 {len(hexdump_lines)-20} 行未显示")
+            
+            # 显示其他可能存在的字段
+            important_fields = ['src', 'dst', 'info', 'summary', 'fragment_id', 'fragment_offset']
+            for field in important_fields:
+                if field in packet and packet[field]:
+                    lines.append(f"\n【{field.upper()}】")
+                    lines.append(f"  {packet[field]}")
+            
+            detail_text = '\n'.join(lines)
+            self.detail_text.setText(detail_text)
+            
+            # 设置原始数据
+            if 'hexdump' in packet:
+                self.raw_text.setText(packet['hexdump'])
+            elif 'raw' in packet:
+                self.raw_text.setText(str(packet['raw']))
+            else:
+                self.raw_text.setText("无原始数据")
+            
+        except Exception as e:
+            error_msg = f"显示数据包详情时出错:\n{str(e)}\n\n数据包结构:\n{str(packet)[:500]}..."
+            print(f"显示详情错误: {e}")
+            import traceback
+            traceback.print_exc()
+            self.detail_text.setText(error_msg)
+            self.raw_text.setText("")
 
     def update_stats_display(self, stats):
         """更新统计信息显示"""

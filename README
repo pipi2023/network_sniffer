@@ -18,14 +18,14 @@ dhcp=true
         注意: 需要关闭windows防火墙
 
 DNS 查询(UDP协议): wsl中执行: sudo tcpdump -i any port 53 -nn -v
-        选择接口lo, wsl中另起终端: nslookup www.baidu.com
+        选择接口eth0, wsl中另起终端: nslookup www.baidu.com 114.114.114.114
 
 HTTP 请求(TCP协议): 选择接口eth0: curl -v http://httpbin.org/get
 
 传输文件操作: 
         Netcat测试(filter: port 9999):
         跨主机(选择接口eth0)(wsl2上可以通过: sudo tcpdump -i any port 9999 -vvv -X 验证)
-        windows上终端输入:  
+        windows PowerShell上输入:  
                         $listener = [System.Net.Sockets.TcpListener]::new(9999)
                         $listener.Start()
                         $client = $listener.AcceptTcpClient()
@@ -41,12 +41,6 @@ HTTP 请求(TCP协议): 选择接口eth0: curl -v http://httpbin.org/get
                         $stream.Close()
                         $client.Close()
                         $listener.Stop() 
-        本地回环(选择接口lo)(wsl2上可以通过: sudo tcpdump -i any port 9999 -vvv -X验证)
-        wsl2上终端输入: 
-                nc -N -l -p 9999 > received_file.txt
-        wsl2上另起终端输入:
-                echo "Hello Sniffer Test!" > send_file.txt
-                nc -N 172.23.1.122 9999 < send_file.txt
 
         HTTP测试(filter: port 8000):
         跨主机(选择接口eth0):
@@ -55,3 +49,5 @@ HTTP 请求(TCP协议): 选择接口eth0: curl -v http://httpbin.org/get
                 python3 -m http.server 8000 &  # 在WSL内部启动一个Web服务器
         windows上终端输入: wget http://172.23.1.122:8000/HTTPFile_test.txt  -UseBasicParsing -OutFile "HTTPFile_test.txt"
         wsl2上终端输入: pkill -f "http.server 8000" # 关闭服务器
+
+注: wsl 特殊网络设置, lo 会重复抓一个包两次。

@@ -9,6 +9,7 @@ class IPReassembler:
         self.timeout = timeout
         self.fragments = defaultdict(dict) # (src, dst, id) -> {offset: packet}
         self.creation_times = {}
+        self.debug_mode = True
 
     def process_packet(self, packet):
         """处理数据包，检查是否需要重组"""
@@ -20,7 +21,7 @@ class IPReassembler:
 
         # 不是分片包，直接返回
         if ip.frag == 0 and not ip.flags.MF:
-            return packet
+            return None
         
         # 对于分片包，调用分片处理方法
         return self._process_fragment(packet)
@@ -34,9 +35,15 @@ class IPReassembler:
         self.fragments[key][offset] = ip_packet
         self.creation_times[key] = time.time()
 
+        if self.debug_mode:
+            print(f"DEBUG: 存储分片 key={key}, offset={offset}, MF={ip_packet.flags.MF}")
+            print(f"DEBUG: 当前分片集合中的偏移量: {sorted(self.fragments[key].keys())}")
+
         # 检查是否可以重组
         reassembled = self._try_reassemble(key)
         if reassembled:
+            if self.debug_mode:
+                print(f"DEBUG: 成功重组包 key={key}")
             # 清缓存
             del self.fragments[key]
             del self.creation_times[key]
@@ -116,7 +123,7 @@ class IPReassembler:
         try:
             base_ip = first_fragment[IP]
         
-            # 方法1：手动构建新的IP包（最可靠）
+            # 手动构建新的IP包
             # 获取IP头部信息
             ip_header = bytearray(bytes(base_ip)[:base_ip.ihl * 4])
             
@@ -146,13 +153,12 @@ class IPReassembler:
             # 重新计算校验和
             del reassembled_packet.chksum
             
-            # 添加以太网层（如果有）
-            # if first_fragment.haslayer(Ether):
-            #     eth = Ether(bytes(first_fragment[Ether]))
-            #     reassembled_packet = eth / reassembled_packet
-            #     print(f"DEBUG: 添加Ethernet层")
-            
-            return reassembled_packet
+            if isinstance(reassembled_packet, IP):
+                # 如果是IP包，确保它是完整的
+                return reassembled_packet
+            else:
+                print(f"DEBUG: 重组包类型不是IP: {type(reassembled_packet)}")
+                return None
             
         except Exception as e:
             print(f"DEBUG: 重组过程中出错: {e}")

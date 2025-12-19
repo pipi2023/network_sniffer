@@ -21,7 +21,10 @@ class ProtocolParser:
             'hexdump': '', # 十六进制转储
             'is_fragment': False,
             'is_reassembled': is_reassembled,
-            'fragment_info': None
+            'fragment_info': None,
+            'fragment_id': None,  # 添加分片ID字段
+            'fragment_offset': 0,  # 添加分片偏移字段
+            'is_last_fragment': False  # 添加是否最后一个分片字段
         }
 
         # 添加重组标记
@@ -35,15 +38,18 @@ class ProtocolParser:
             ip = packet[IP]
             is_fragment = ip.flags.MF or ip.frag > 0
             parsed_data['is_fragment'] = is_fragment
+            parsed_data['fragment_id'] = ip.id
+            parsed_data['fragment_offset'] = ip.frag
+            parsed_data['is_last_fragment'] = not ip.flags.MF and ip.frag > 0
             
             if is_fragment:
                 fragment_number = (ip.frag // 8) + 1
                 if ip.frag == 0:
-                    fragment_info = "First fragment"
+                    fragment_info = f"First fragment (ID: {ip.id})"
                 elif ip.flags.MF:
-                    fragment_info = f"Middle fragment {fragment_number}"
+                    fragment_info = f"Middle fragment {fragment_number} (ID: {ip.id})"
                 else:
-                    fragment_info = f"Last fragment {fragment_number}"
+                    fragment_info = f"Last fragment {fragment_number} (ID: {ip.id})"
                 parsed_data['fragment_info'] = fragment_info
 
         # 数据链路层 - Ethernet
@@ -109,11 +115,11 @@ class ProtocolParser:
             ip = packet[IP]
             if ip.frag == 0 and packet.haslayer(ICMP):
                 # 第一个分片包含ICMP头
-                parsed_data['summary'] = base_summary
+                parsed_data['summary'] = f"{base_summary} [Fragment {parsed_data['fragment_info']}]"
             else:
                 # 后续分片不包含上层协议头
-                parsed_data['summary'] = f"Ether / IP"
-        else:
+                parsed_data['summary'] = f"Ether / IP [Fragment {parsed_data['fragment_info']}]"
+        else:        
             parsed_data['summary'] = base_summary
             
         # 生成十六进制转储
@@ -253,23 +259,14 @@ class ProtocolParser:
             
             # 判断分片状态
             if ip.frag == 0:
-                fragment_info = "First fragment"
-
-                # 第一个分片包含ICMP头
-                if ip.haslayer(ICMP):
-                    icmp = ip[ICMP]
-                    icmp_type = icmp.type
-                    type_map = {0: 'Echo Reply', 8: 'Echo Request'}
-                    icmp_desc = type_map.get(icmp_type, f'icmp-type-{icmp_type}')
-                    description = f"{ip.src} > {ip.dst} {icmp_desc} 0"
-                else:
-                    description = f"{ip.src} > {ip.dst} {self._get_proto_name(ip.proto)}"
+                fragment_info = f"First fragment (ID: {ip.id})"
+                description = f"{ip.src} > {ip.dst} IP Fragment {fragment_info}"
             elif ip.flags.MF:
-                fragment_info = f"Middle fragment {fragment_number}"
-                description = f"{ip.src} > {ip.dst} {self._get_proto_name(ip.proto)} frag:{fragment_number}"
+                fragment_info = f"Middle fragment {fragment_number} (ID: {ip.id})"
+                description = f"{ip.src} > {ip.dst} IP Fragment {fragment_info}"
             else:
-                fragment_info = f"Last fragment {fragment_number}"
-                description = f"{ip.src} > {ip.dst} {self._get_proto_name(ip.proto)} frag:{fragment_number}"
+                fragment_info = f"Last fragment {fragment_number} (ID: {ip.id})"
+                description = f"{ip.src} > {ip.dst} IP Fragment {fragment_info}"
         
         elif not is_fragment:
             # 不是分片包
@@ -313,7 +310,7 @@ class ProtocolParser:
             'ttl': ip.ttl,
             'protocol': ip.proto,
             'protocol_name': self._get_proto_name(ip.proto),
-            'header_checksum': f"0x{ip.chksum:04x}",
+            'header_checksum': f"0x{ip.chksum:04x}" if ip.chksum is not None else "0x0000",
             'source_ip': ip.src,
             'destination_ip': ip.dst,
             'is_fragment': is_fragment,
