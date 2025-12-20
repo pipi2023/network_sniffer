@@ -354,12 +354,15 @@ class PacketSniffer:
         parsed_fragment = None
         try:
             if self.packet_parser and hasattr(self.packet_parser, 'parse_packet'):
+                enhanced_summary = self._create_enhanced_summary(packet)
+
                 # 解析原始分片包
                 parsed_fragment = self.packet_parser.parse_packet(
                     packet, 
                     self.packet_count, 
                     is_reassembled=False
                 )
+                parsed_fragment['summary'] = enhanced_summary
                 parsed_fragment['is_fragment'] = is_fragment
                 parsed_fragment['fragment_id'] = fragment_id
                 parsed_fragment['fragment_offset'] = fragment_offset
@@ -420,6 +423,7 @@ class PacketSniffer:
                     reassembled_packet_number = self.packet_count
                     self.stats['total_packets'] = self.packet_count
                     self.stats['bytes_received'] += len(reassembled_packet)
+                    enhanced_summary = self._create_enhanced_summary(reassembled_packet)
 
                     # 解析重组包
                     parsed_reassembled = None
@@ -434,6 +438,7 @@ class PacketSniffer:
                                 reassembled_packet_number,  # 新的包号
                                 is_reassembled
                             )
+                            parsed_reassembled['summary'] = f"[Reassembled] {enhanced_summary}"
                             parsed_reassembled['reassembled'] = True
                             parsed_reassembled['original_fragments'] = fragment_id  # 可以记录来自哪些分片
                             if self.debug_mode:
@@ -682,3 +687,113 @@ class PacketSniffer:
         # 强制垃圾回收，清理残留对象
         import gc
         gc.collect()
+
+    def _create_enhanced_summary(self, packet):
+        """创建增强的数据包摘要信息"""
+        try:
+            # 基本的Scapy摘要
+            base_summary = packet.summary() if hasattr(packet, 'summary') else "Raw Packet"
+            
+            # 提取协议信息
+            protocol_info = []
+            
+            # 检查TCP标志位
+            if packet.haslayer(self.scapy.TCP):
+                tcp = packet[self.scapy.TCP]
+                flags = []
+                
+                # 收集所有设置的标志位
+                if tcp.flags.F: flags.append('FIN')
+                if tcp.flags.S: flags.append('SYN')
+                if tcp.flags.R: flags.append('RST')
+                if tcp.flags.P: flags.append('PSH')
+                if tcp.flags.A: flags.append('ACK')
+                if tcp.flags.U: flags.append('URG')
+                if tcp.flags.E: flags.append('ECE')
+                if tcp.flags.C: flags.append('CWR')
+                
+                if flags:
+                    # 只添加标志位信息，不重复协议类型
+                    if 'TCP' in base_summary:
+                        # 如果基础摘要中已经有TCP，添加标志位
+                        flag_str = f"[{','.join(flags)}]"
+                        # 检查是否已经有类似的信息
+                        if flag_str not in base_summary:
+                            # 在端口信息后添加标志位
+                            if '>' in base_summary:
+                                parts = base_summary.split('>')
+                                if len(parts) > 1:
+                                    base_summary = f"{parts[0]}> {flag_str} {parts[1]}"
+                            else:
+                                base_summary = f"{base_summary} {flag_str}"
+            
+            # 检查ICMP类型
+            elif packet.haslayer(self.scapy.ICMP):
+                icmp = packet[self.scapy.ICMP]
+                icmp_type = icmp.type
+                
+                type_map = {
+                    0: 'Echo Reply',
+                    3: 'Destination Unreachable',
+                    4: 'Source Quench',
+                    5: 'Redirect Message',
+                    8: 'Echo Request',
+                    9: 'Router Advertisement',
+                    10: 'Router Solicitation',
+                    11: 'Time Exceeded',
+                    12: 'Parameter Problem',
+                    13: 'Timestamp Request',
+                    14: 'Timestamp Reply',
+                    15: 'Information Request',
+                    16: 'Information Reply'
+                }
+                
+                if icmp_type in type_map:
+                    type_name = type_map[icmp_type]
+                    # 如果基础摘要中没有ICMP类型信息，添加它
+                    if f"type-{icmp_type}" not in base_summary and type_name not in base_summary:
+                        if 'ICMP' in base_summary:
+                            base_summary = base_summary.replace('ICMP', f'ICMP [{type_name}]')
+            
+            # 检查DNS查询类型
+            elif packet.haslayer(self.scapy.DNS):
+                dns = packet[self.scapy.DNS]
+                if hasattr(dns, 'qd') and dns.qd:
+                    # 查询记录
+                    for q in dns.qd:
+                        if hasattr(q, 'qtype'):
+                            qtype = q.qtype
+                            type_map = {
+                                1: 'A',
+                                2: 'NS',
+                                5: 'CNAME',
+                                6: 'SOA',
+                                12: 'PTR',
+                                15: 'MX',
+                                16: 'TXT',
+                                28: 'AAAA'
+                            }
+                            if qtype in type_map:
+                                type_name = type_map[qtype]
+                                if f"type {qtype}" not in base_summary:
+                                    base_summary = f"{base_summary} [Qtype:{type_name}]"
+            
+            # 检查是否为分片包
+            if packet.haslayer(self.scapy.IP):
+                ip = packet[self.scapy.IP]
+                if ip.flags.MF or ip.frag > 0:
+                    if '[Fragment]' not in base_summary:
+                        fragment_num = (ip.frag // 8) + 1
+                        if ip.frag == 0:
+                            base_summary = f"[First Fragment] {base_summary}"
+                        elif ip.flags.MF:
+                            base_summary = f"[Middle Fragment {fragment_num}] {base_summary}"
+                        else:
+                            base_summary = f"[Last Fragment {fragment_num}] {base_summary}"
+            
+            return base_summary
+            
+        except Exception as e:
+            if self.debug_mode:
+                print(f"DEBUG: 创建增强摘要时出错: {e}")
+            return packet.summary() if hasattr(packet, 'summary') else "Packet"

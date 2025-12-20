@@ -4,11 +4,11 @@ from functools import partial
 import sys
 import threading
 from PyQt5.QtWidgets import (QApplication, QMainWindow, QVBoxLayout, QHBoxLayout, 
-                             QWidget, QPushButton, QComboBox, QTableWidget, 
-                             QTableWidgetItem, QTextEdit, QSplitter, QLabel,
-                             QTabWidget, QHeaderView, QProgressBar, QMessageBox)
+                            QWidget, QPushButton, QComboBox, QTableWidget, 
+                            QTableWidgetItem, QTextEdit, QSplitter, QLabel,
+                            QTabWidget, QHeaderView, QProgressBar, QMessageBox)
 from PyQt5.QtCore import QTimer, Qt, pyqtSignal
-from PyQt5.QtGui import QFont, QColor
+from PyQt5.QtGui import QFont, QColor, QPalette
 import time
 
 class MainWindow(QMainWindow):
@@ -35,38 +35,183 @@ class MainWindow(QMainWindow):
         """初始化 UI 界面"""
         self.setWindowTitle("网络数据包嗅探器")
         # 设置窗口初始位置和大小
-        self.setGeometry(100, 100, 1400, 900)
+        self.setGeometry(100, 100, 1600, 1000)
+
+        # 设置应用样式
+        self.setStyleSheet("""
+            QMainWindow {
+                background-color: #f0f0f0;
+            }
+            QLabel {
+                font-weight: bold;
+                color: #333;
+            }
+            QPushButton {
+                font-weight: bold;
+                border-radius: 6px;
+                padding: 8px 16px;
+                font-size: 13px;
+            }
+            QComboBox {
+                padding: 6px;
+                border-radius: 4px;
+                border: 1px solid #ccc;
+                background-color: white;
+            }
+            QTextEdit {
+                background-color: white;
+                border: 1px solid #ccc;
+                border-radius: 4px;
+                padding: 8px;
+            }
+            QTableWidget {
+                background-color: white;
+                border: 1px solid #ccc;
+                border-radius: 4px;
+                alternate-background-color: #f9f9f9;
+                gridline-color: #e0e0e0;
+            }
+            QHeaderView::section {
+                background-color: #4a6fa5;
+                color: white;
+                font-weight: bold;
+                padding: 8px;
+                border: none;
+            }
+            QTabWidget::pane {
+                border: 1px solid #ccc;
+                background-color: white;
+                border-radius: 6px;
+            }
+            QTabBar::tab {
+                background-color: #e0e0e0;
+                padding: 10px 20px;
+                margin-right: 4px;
+                border-top-left-radius: 6px;
+                border-top-right-radius: 6px;
+                font-weight: bold;
+            }
+            QTabBar::tab:selected {
+                background-color: #4a6fa5;
+                color: white;
+            }
+            QStatusBar {
+                background-color: #4a6fa5;
+                color: white;
+                font-weight: bold;
+            }
+        """)
 
         # 创建中央窗口部件
         central_widget = QWidget()
+        central_widget.setStyleSheet("background-color: #f5f5f5;")
         self.setCentralWidget(central_widget)
         # 主布局
         main_layout = QVBoxLayout(central_widget)
+        main_layout.setSpacing(12)
+        main_layout.setContentsMargins(20, 20, 20, 20)
 
         # 控制面板
-        control_layout = QHBoxLayout()
+        control_panel = QWidget()
+        control_panel.setStyleSheet("""
+            QWidget {
+                background-color: white;
+                border-radius: 10px;
+                padding: 15px;
+            }
+        """)
+        control_layout = QHBoxLayout(control_panel)
+        control_layout.setSpacing(15)
+
         # 添加网卡选择
-        control_layout.addWidget(QLabel("网卡选择:"))
+        interface_label = QLabel("网卡选择:")
+        interface_label.setFont(QFont("Microsoft YaHei", 20))
+        control_layout.addWidget(interface_label)
         self.interface_combo = QComboBox() # 创建网络接口选择下拉框
-        self.interface_combo.setMinimumWidth(300)
+        self.interface_combo.setFont(QFont("Consolas", 18))
+        self.interface_combo.setMinimumWidth(400)
+        self.interface_combo.setMinimumHeight(40)
+        self.interface_combo.setStyleSheet("""
+            QComboBox {
+                padding: 8px;
+                font-size: 15px;
+            }
+            QComboBox QAbstractItemView {
+                min-height: 30px; 
+                padding: 8px; 
+                font-size: 14px;
+            }
+        """)
         control_layout.addWidget(self.interface_combo)
 
         # 添加过滤条件
-        control_layout.addWidget(QLabel("过滤条件:"))
-        self.filter_edit = QComboBox() # 创建过滤条件选择下拉框
-        self.filter_edit.setEditable(True) # 允许用户输入自定义过滤条件
-        self.filter_edit.addItems(["", "tcp", "udp", "icmp", "arp", "port 80", "port 443", "host 192.168.1.1"]) # 添加常用过滤器选项
-        self.filter_edit.setMinimumWidth(200)
+        filter_label = QLabel("过滤条件:")
+        filter_label.setFont(QFont("Microsoft YaHei", 20))
+        control_layout.addWidget(filter_label)
+        self.filter_edit = QComboBox()
+        self.filter_edit.setEditable(True)
+        self.filter_edit.setFont(QFont("Consolas", 18))
+        self.filter_edit.addItems(["", "tcp", "udp", "icmp", "arp", "port 80", "port 9999", "host 192.168.1.1"])
+        self.filter_edit.setMinimumWidth(250)
+        self.filter_edit.setStyleSheet("""
+            QComboBox {
+                padding: 8px;
+                font-size: 15px;
+            }
+        """)
         control_layout.addWidget(self.filter_edit)
 
         # 添加开始按钮
         self.start_button = QPushButton("开始抓包")
-        self.start_button.setStyleSheet("QPushButton { background-color: #4CAF50; color: white; }")
+        self.start_button.setFont(QFont("Microsoft YaHei", 20))
+        self.start_button.setStyleSheet("""
+            QPushButton {
+                background-color: #28a745;
+                color: white;
+                border: 2px solid #218838;
+            }
+            QPushButton:hover {
+                background-color: #218838;
+            }
+            QPushButton:pressed {
+                background-color: #1e7e34;
+            }
+        """)
+
         # 添加停止按钮
         self.stop_button = QPushButton("停止抓包")
-        self.stop_button.setStyleSheet("QPushButton { background-color: #f44336; color: white; }")
+        self.stop_button.setFont(QFont("Microsoft YaHei", 20))
+        self.stop_button.setStyleSheet("""
+            QPushButton {
+                background-color: #dc3545;
+                color: white;
+                border: 2px solid #c82333;
+            }
+            QPushButton:hover {
+                background-color: #c82333;
+            }
+            QPushButton:pressed {
+                background-color: #bd2130;
+            }
+        """)
+        self.stop_button.setEnabled(False)
+
         # 添加清空按钮
         self.clear_button = QPushButton("清空数据")
+        self.clear_button.setFont(QFont("Microsoft YaHei", 20))
+        self.clear_button.setStyleSheet("""
+            QPushButton {
+                background-color: #6c757d;
+                color: white;
+                border: 2px solid #5a6268;
+            }
+            QPushButton:hover {
+                background-color: #5a6268;
+            }
+            QPushButton:pressed {
+                background-color: #545b62;
+            }
+        """)
 
         control_layout.addWidget(self.start_button)
         control_layout.addWidget(self.stop_button)
@@ -74,11 +219,15 @@ class MainWindow(QMainWindow):
         control_layout.addStretch()
 
         self.stats_label = QLabel("就绪")
+        self.stats_label.setFont(QFont("Microsoft YaHei", 20, QFont.Bold))
+        self.stats_label.setStyleSheet("color: #4a6fa5; padding: 8px;")
         control_layout.addWidget(self.stats_label)
-        main_layout.addLayout(control_layout)
+
+        main_layout.addWidget(control_panel)
 
         # 创建标签页控件
         self.tabs = QTabWidget()
+        self.tabs.setFont(QFont("Microsoft YaHei", 20))
         main_layout.addWidget(self.tabs)
 
         # 数据包列表标签页
@@ -91,11 +240,14 @@ class MainWindow(QMainWindow):
 
         # 显示状态栏信息
         self.statusBar().showMessage("准备就绪, 请选择需要侦听的网卡并开始抓包")
+        self.statusBar().setFont(QFont("Microsoft YaHei", 18))
 
     def create_packet_tab(self):
         """创建数据包列表标签页"""
         tab = QWidget()
         layout = QVBoxLayout(tab)
+        layout.setSpacing(10)
+        layout.setContentsMargins(10, 10, 10, 10)
 
         # 创建数据包表格
         self.packet_table = QTableWidget()
@@ -110,6 +262,24 @@ class MainWindow(QMainWindow):
             "端口", 
             "描述" 
         ])
+
+        # 设置表格样式
+        self.packet_table.setStyleSheet("""
+            QTableWidget {
+                font-size: 13px;
+                selection-background-color: #cce5ff;
+                selection-color: black;
+            }
+            QTableWidget::item {
+                padding: 8px;
+                min-height: 28px;
+            }
+        """)
+        header_font = QFont("Microsoft YaHei", 14, QFont.Bold)  # 表头更大一些
+        header = self.packet_table.horizontalHeader()
+        header.setFont(header_font)
+        # 设置行高
+        self.packet_table.verticalHeader().setDefaultSectionSize(35) 
 
         # 设置列宽调整策略
         header = self.packet_table.horizontalHeader()
@@ -126,27 +296,56 @@ class MainWindow(QMainWindow):
 
         # 详情分割器
         splitter = QSplitter(Qt.Vertical)
+        splitter.setStyleSheet("""
+            QSplitter::handle {
+                background-color: #ccc;
+                height: 4px;
+            }
+        """)
         # 数据包详情
         detail_widget = QWidget()
         detail_layout = QVBoxLayout(detail_widget)
-        detail_layout.addWidget(QLabel("数据包详情:"))
+        detail_label = QLabel("数据包详情:")
+        detail_label.setFont(QFont("Microsoft YaHei", 22, QFont.Bold))
+        detail_label.setStyleSheet("color: #2c3e50;")
+        detail_layout.addWidget(detail_label)
+
         # 创建文本编辑框显示协议详情
         self.detail_text = QTextEdit()
+        
         # 使用等宽字体, 便于对齐显示
-        self.detail_text.setFont(QFont("Consolas", 9))
+        self.detail_text.setFont(QFont("Consolas", 15))
+        self.detail_text.setStyleSheet("""
+            QTextEdit {
+                background-color: #f8f9fa;
+                border: 2px solid #dee2e6;
+                font-size: 12px;
+            }
+        """)
         detail_layout.addWidget(self.detail_text)
 
         # 原始数据
         raw_widget = QWidget()
         raw_layout = QVBoxLayout(raw_widget)
-        raw_layout.addWidget(QLabel("原始数据:"))
+        raw_label = QLabel("原始数据: ")
+        raw_label.setFont(QFont("Microsoft YaHei", 22, QFont.Bold))
+        raw_label.setStyleSheet("color: #2c3e50;")
+        raw_layout.addWidget(raw_label)
+        
         self.raw_text = QTextEdit()
-        self.raw_text.setFont(QFont("Consolas", 9))
+        self.raw_text.setFont(QFont("Consolas", 15))
+        self.raw_text.setStyleSheet("""
+            QTextEdit {
+                background-color: #f8f9fa;
+                border: 2px solid #dee2e6;
+                font-size: 12px;
+            }
+        """)
         raw_layout.addWidget(self.raw_text)
 
         splitter.addWidget(detail_widget)
         splitter.addWidget(raw_widget)
-        splitter.setSizes([400, 300])
+        splitter.setSizes([500, 300])
 
         layout.addWidget(self.packet_table)
         layout.addWidget(splitter)
@@ -157,9 +356,25 @@ class MainWindow(QMainWindow):
         """创建统计信息标签页"""
         tab = QWidget()
         layout = QVBoxLayout(tab)
+        layout.setContentsMargins(15, 15, 15, 15)
+        
+        stats_label = QLabel("实时统计信息: ")
+        stats_label.setFont(QFont("Microsoft YaHei", 20, QFont.Bold))
+        stats_label.setStyleSheet("color: #2c3e50; margin-bottom: 15px;")
+        layout.addWidget(stats_label)
         
         self.stats_text = QTextEdit()
-        self.stats_text.setFont(QFont("Consolas", 10))
+        self.stats_text.setFont(QFont("Consolas", 11))
+        self.stats_text.setStyleSheet("""
+            QTextEdit {
+                background-color: #f8f9fa;
+                border: 2px solid #dee2e6;
+                border-radius: 8px;
+                padding: 15px;
+                font-size: 13px;
+                line-height: 1.5;
+            }
+        """)
         layout.addWidget(self.stats_text)
         
         return tab
